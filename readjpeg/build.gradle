@@ -1,0 +1,5 @@
+task buildNative(type: Exec) { 
+    outputs.upToDateWhen { false }
+    outputs.files("build/libreadjpeg.so")
+    commandLine = ["make", "all"]
+}

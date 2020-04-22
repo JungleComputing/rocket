@@ -1,0 +1,164 @@
+plugins {
+    // Apply the java plugin to add support for Java
+    id 'java'
+
+    // Apply the application plugin to add support for building an application
+    id 'application'
+
+    // Needed for log4j
+    id 'io.spring.dependency-management' version '1.0.1.RELEASE'
+ 
+}
+
+// Define the main class for the application
+mainClassName = 'nl.esciencecenter.Main'
+
+def static getOsString() {
+    String vendor = System.getProperty("java.vendor");
+    if ("The Android Project" == vendor) {
+        return "android";
+    } else {
+        String osName = System.getProperty("os.name");
+        osName = osName.toLowerCase(Locale.ENGLISH);
+        if (osName.startsWith("windows")) {
+            return "windows";
+        } else if (osName.startsWith("mac os")) {
+            return "apple";
+        } else if (osName.startsWith("linux")) {
+            return "linux";
+        } else if (osName.startsWith("sun")) {
+            return "sun"
+        }
+        return "unknown"
+    }
+}
+
+def static getArchString() {
+    String osArch = System.getProperty("os.arch");
+    osArch = osArch.toLowerCase(Locale.ENGLISH);
+    if ("i386" == osArch || "x86" == osArch || "i686" == osArch) {
+        return "x86";
+    } else if (osArch.startsWith("amd64") || osArch.startsWith("x86_64")) {
+        return "x86_64";
+    } else if (osArch.startsWith("arm64")) {
+        return "arm64";
+    } else if (osArch.startsWith("arm")) {
+        return "arm";
+    } else if ("ppc" == osArch || "powerpc" == osArch) {
+        return "ppc";
+    } else if (osArch.startsWith("ppc")) {
+        return "ppc_64";
+    } else if (osArch.startsWith("sparc")) {
+        return "sparc";
+    } else if (osArch.startsWith("mips64")) {
+        return "mips64";
+    } else if (osArch.startsWith("mips")) {
+        return "mips";
+    } else if (osArch.contains("risc")) {
+        return "risc";
+    }
+    return "unknown";
+}
+
+processResources.dependsOn(':phylogenetics:buildNative')
+processResources.dependsOn(':readjpeg:buildNative')
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: 'InfinibandIbis.jar')
+
+    compile 'nl.junglecomputing:pidgin:0.2.3'
+    compile 'nl.junglecomputing:constellation:2.1.0-sc20'
+
+    compile 'org.apache.logging.log4j:log4j-api'
+    compile 'org.apache.logging.log4j:log4j-core'
+    compile 'org.apache.logging.log4j:log4j-slf4j-impl:2.12.1'
+
+    compile 'edu.emory.mathcs:JTransforms:2.4'
+    compile 'org.lucee:commons-io:2.4.0'
+
+    compile 'com.edwardraff:JSAT:0.0.9'
+    compile 'org.json:json:20190722'
+    compile 'com.beust:jcommander:1.78'
+
+    // JNA
+    implementation 'net.java.dev.jna:jna:5.5.0'
+
+    // compression library for compressing profile files
+    compile group: 'org.apache.commons', name: 'commons-compress', version: '1.20'
+
+    // jcuda dependencies
+    def classifier = getOsString()+'-'+getArchString()
+
+    compile (group: 'org.jcuda', name: 'jcuda', version: '10.0.0',){
+        transitive=false
+    }
+    compile (group: 'org.jcuda', name: 'jcufft', version: '10.0.0',){
+        transitive=false
+    }
+    compile group: 'org.jcuda', name: 'jcuda-natives', classifier: classifier, version: '10.0.0'
+    compile group: 'org.jcuda', name: 'jcufft-natives', classifier: classifier, version: '10.0.0'
+
+    compile (group: 'nl.esciencecenter.xenon', name: 'xenon', version: '3.0.2') {
+        exclude group: 'ch.qos.logback', module: 'logback-classic'
+    }
+    compile (group: 'nl.esciencecenter.xenon.adaptors', name: 'xenon-adaptors-cloud', version: '3.0.2') {
+        exclude group: 'ch.qos.logback', module: 'logback-classic'
+    }
+
+    // Use JUnit test framework
+    testCompile 'junit:junit:4.12'
+}
+
+test {
+    testLogging.showStandardStreams = true
+}
+
+dependencyManagement {
+    imports {
+        // for log4j2
+        mavenBom 'org.apache.logging.log4j:log4j-bom:2.12.0'
+    }
+}
+
+repositories {
+    mavenLocal()
+    jcenter()
+    mavenCentral()
+
+}
+
+jar {
+   from('src/main/java') {
+      include '**/*.cu'
+   }
+   
+   into('linux-x86-64') {
+      from (project(':phylogenetics').buildDir) {
+        include 'libphylogenetics.so'
+      }
+
+      from (project(':readjpeg').buildDir) {
+        include 'libreadjpeg.so'
+      }
+   }
+}
+
+task copyTestResources(type: Copy) {
+    from ("${projectDir}/src/main/java/") {
+        include "**/*.cu"
+        into "classes/java/main/"
+    }
+
+    from (project(':phylogenetics').buildDir) {
+        include 'libphylogenetics.so'
+        into "resources/test/linux-x86-64/"
+    }
+
+    from (project(':readjpeg').buildDir) {
+        include 'libreadjpeg.so'
+        into "resources/test/linux-x86-64/"
+    }
+
+    into "${buildDir}"
+}
+processTestResources.dependsOn copyTestResources

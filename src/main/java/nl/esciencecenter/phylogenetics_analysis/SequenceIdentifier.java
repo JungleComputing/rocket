@@ -1,12 +1,11 @@
 package nl.esciencecenter.phylogenetics_analysis;
 
 
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.Serializable;
+import nl.esciencecenter.rocket.types.HashableKey;
+
 import java.util.Objects;
 
-public class SequenceIdentifier implements Serializable, Comparable<SequenceIdentifier> {
+public class SequenceIdentifier implements HashableKey {
     private static final long serialVersionUID = -4841143185809316055L;
 
     private String path;
@@ -38,7 +37,8 @@ public class SequenceIdentifier implements Serializable, Comparable<SequenceIden
     }
 
     @Override
-    public int compareTo(SequenceIdentifier that) {
-        return this.path.compareTo(that.path);
+    public int compareTo(HashableKey that) {
+        if (that == null || getClass() != that.getClass()) return 0;
+        return this.path.compareTo(((SequenceIdentifier) that).path);
     }
 }

@@ -15,7 +15,6 @@
 */
 package nl.esciencecenter.rocket;
 
-import ibis.constellation.Activity;
 import ibis.constellation.ActivityIdentifier;
 import ibis.constellation.Constellation;
 import ibis.constellation.ConstellationConfiguration;
@@ -27,33 +26,33 @@ import ibis.constellation.NoSuitableExecutorException;
 import ibis.constellation.OrContext;
 import ibis.constellation.StealPool;
 import ibis.constellation.StealStrategy;
+import ibis.constellation.util.SingleEventCollector;
 import nl.esciencecenter.rocket.activities.Communicator;
-import nl.esciencecenter.rocket.activities.CorrelationsCollectActivity;
-import nl.esciencecenter.rocket.activities.CorrelationsLeafActivity;
-import nl.esciencecenter.rocket.activities.CorrelationsMatrixActivity;
+import nl.esciencecenter.rocket.activities.ResultsCollectActivity;
+import nl.esciencecenter.rocket.activities.LeafActivity;
+import nl.esciencecenter.rocket.activities.HierarchicalActivity;
 import nl.esciencecenter.rocket.cubaapi.CudaContext;
 import nl.esciencecenter.rocket.cubaapi.CudaDevice;
+import nl.esciencecenter.rocket.cubaapi.CudaMem;
 import nl.esciencecenter.rocket.cubaapi.CudaMemByte;
 import nl.esciencecenter.rocket.cubaapi.CudaPinned;
-import nl.esciencecenter.rocket.indexspace.HilbertCurveIndexSpace;
-import nl.esciencecenter.rocket.indexspace.IndexSpace;
-import nl.esciencecenter.rocket.indexspace.IndexSpaceDivision;
-import nl.esciencecenter.rocket.indexspace.TilingIndexSpace;
+import nl.esciencecenter.rocket.indexspace.CorrelationSpawner;
+import nl.esciencecenter.rocket.indexspace.HilbertIndexTask;
+import nl.esciencecenter.rocket.types.HierarchicalTask;
+import nl.esciencecenter.rocket.indexspace.TilingIndexTask;
 import nl.esciencecenter.rocket.profiling.AggregateProfiler;
 import nl.esciencecenter.rocket.profiling.DummyProfiler;
 import nl.esciencecenter.rocket.profiling.FilterProfiler;
 import nl.esciencecenter.rocket.profiling.Profiler;
 import nl.esciencecenter.rocket.profiling.MasterProfiler;
 import nl.esciencecenter.rocket.cache.DeviceCache;
-import nl.esciencecenter.rocket.scheduler.DeviceWorker;
 import nl.esciencecenter.rocket.cache.DistributedCache;
 import nl.esciencecenter.rocket.cache.FileCache;
 import nl.esciencecenter.rocket.cache.HostCache;
-import nl.esciencecenter.rocket.scheduler.HostWorker;
-import nl.esciencecenter.rocket.scheduler.ApplicationContext;
-import nl.esciencecenter.rocket.util.CorrelationList;
+import nl.esciencecenter.rocket.types.ApplicationContext;
+import nl.esciencecenter.rocket.types.InputTask;
+import nl.esciencecenter.rocket.types.LeafTask;
 import nl.esciencecenter.rocket.util.NodeInfo;
-import nl.esciencecenter.rocket.util.Tuple;
 import nl.esciencecenter.rocket.util.Util;
 import nl.esciencecenter.xenon.filesystems.FileSystem;
 import nl.esciencecenter.xenon.filesystems.Path;
@@ -75,19 +74,19 @@ import java.util.function.Function;
 
 //stuff for output
 
-public class RocketLauncher<K, R> {
+public class RocketLauncher<R> {
     protected static final Logger logger = LogManager.getLogger();
 
-    static public interface ApplicationFactory<K, R> {
-        public ApplicationContext<K, R> create(CudaContext ctx) throws Throwable;
+    static public interface ApplicationFactory {
+        public ApplicationContext create(CudaContext ctx) throws Throwable;
     }
 
     private String hostName;
-    private ApplicationFactory<K, R> factory;
+    private ApplicationFactory factory;
     private FileSystem fs;
     RocketLauncherArgs args;
 
-    public RocketLauncher(RocketLauncherArgs args, FileSystem fs, ApplicationFactory<K, R> factory) {
+    public RocketLauncher(RocketLauncherArgs args, FileSystem fs, ApplicationFactory factory) {
         this.factory = factory;
         this.fs = fs;
         this.args = args;
@@ -112,7 +111,7 @@ public class RocketLauncher<K, R> {
         return (after - before) * 1e-9;
     }
 
-    private void runBenchmark(NodeInfo.DeviceInfo info, CudaContext context, ApplicationContext fun, List<Tuple<K, K>> corrs) {
+    private void runBenchmark(NodeInfo.DeviceInfo info, CudaContext context, ApplicationContext fun, List<LeafTask<R>> tasks) {
         long bufferSize = fun.getMaxFileSize();
         CudaPinned scratchHost = context.allocHostBytes(bufferSize);
         CudaMemByte scratchDev = context.allocBytes(bufferSize);
@@ -128,17 +127,17 @@ public class RocketLauncher<K, R> {
 
         info.parsingTime = 0;
         info.loadingTime = 0;
-        info.correlationTime = 0;
+        info.execTime = 0;
         info.preprocessingTime = 0;
 
         try {
             logger.info("performing calibration benchmark ({})", context.getDevice().getName());
 
-            Function<K, ByteBuffer[]> loadInput = key -> {
+            Function<InputTask, ByteBuffer[]> loadInput = key -> {
                 try {
                     List<ByteBuffer> inputs = new ArrayList<>();
 
-                    for (Path path: fun.getInputFiles(key)) {
+                    for (Path path: key.getInputs()) {
                         try (InputStream s = Util.readFile(fs, path)) {
                             inputs.add(ByteBuffer.wrap(s.readAllBytes()));
                         }
@@ -160,38 +159,43 @@ public class RocketLauncher<K, R> {
                 end = System.nanoTime();
 
 
-                K leftKey = corrs.get(runs % corrs.size()).getFirst();
-                K rightKey = corrs.get(runs % corrs.size()).getSecond();
+                LeafTask<R> task = tasks.get(runs % tasks.size());
+                InputTask leftTask = task.getInputs().get(0);
+                InputTask rightTask = task.getInputs().get(1);
+
                 ByteBuffer[][] inputs = new ByteBuffer[2][];
                 long[] sizes = new long[2];
 
                 context.with(() -> {
-                    info.loadingTime += benchmark(() -> inputs[0] = loadInput.apply(leftKey));
-                    info.parsingTime += benchmark(() -> sizes[0] = fun.parseFiles(leftKey, inputs[0], scratchHost.asByteBuffer()));
+                    info.loadingTime += benchmark(() -> inputs[0] = loadInput.apply(leftTask));
+                    info.parsingTime += benchmark(() -> sizes[0] = leftTask.preprocess(inputs[0], scratchHost.asByteBuffer()));
                     scratchHost.copyToDevice(scratchDev);
-                    info.preprocessingTime += benchmark(() -> sizes[0] = fun.preprocessInputGPU(
-                            leftKey,
+                    info.preprocessingTime += benchmark(() -> sizes[0] = leftTask.execute(
+                            fun,
                             scratchDev.slice(0, sizes[0]),
                             patternLeft));
 
-                    info.loadingTime += benchmark(() -> inputs[1] = loadInput.apply(rightKey));
-                    info.parsingTime += benchmark(() -> sizes[1] = fun.parseFiles(rightKey, inputs[1], scratchHost.asByteBuffer()));
+                    info.loadingTime += benchmark(() -> inputs[1] = loadInput.apply(rightTask));
+                    info.parsingTime += benchmark(() -> sizes[1] = rightTask.preprocess(inputs[1], scratchHost.asByteBuffer()));
                     scratchHost.copyToDevice(scratchDev);
-                    info.preprocessingTime += benchmark(() -> sizes[1] = fun.preprocessInputGPU(
-                            rightKey,
+                    info.preprocessingTime += benchmark(() -> sizes[1] = rightTask.execute(
+                            fun,
                             scratchDev.slice(0, sizes[1]),
                             patternRight));
 
-                    info.correlationTime += benchmark(() -> fun.correlateGPU(
-                            leftKey, patternLeft.slice(0, sizes[0]),
-                            rightKey, patternRight.slice(0, sizes[1]),
+                    info.execTime += benchmark(() -> task.execute(
+                            fun,
+                            new CudaMem[]{
+                                    patternLeft.slice(0, sizes[0]),
+                                    patternRight.slice(0, sizes[1]),
+                            },
                             result));
                 });
             }
 
             info.loadingTime /= 2 * runs;
             info.preprocessingTime /= 2 * runs;
-            info.correlationTime /= runs;
+            info.execTime /= runs;
 
         } finally {
             result.free();
@@ -202,28 +206,15 @@ public class RocketLauncher<K, R> {
         }
     }
 
-    private List<Tuple<K,K>> extractCorrelations(IndexSpace<K> indexSpace) {
-        IndexSpaceDivision<K> ctx = new IndexSpaceDivision<>();
-        indexSpace.divide(ctx);
+    private List<LeafTask<R>> extractLeafs(HierarchicalTask<R> indexSpace) {
+        List<LeafTask<R>> leafs = indexSpace.getLeafs();
+        List<HierarchicalTask<R>> children = indexSpace.split();
 
-        List<Tuple<K, K>> corr = ctx.getEntries();
-        List<IndexSpace<K>> children = ctx.getChildren();
-
-        for (IndexSpace<K> t: children) {
-            corr.addAll(extractCorrelations(t));
+        for (HierarchicalTask<R> t: children) {
+            leafs.addAll(extractLeafs(t));
         }
 
-        return corr;
-    }
-
-    private IndexSpace<K> createIndexSpace(K[] keys, boolean includeDiagonal) {
-        int tileSize = args.minimumTileSize;
-
-        if (args.tileScheduling) {
-            return new TilingIndexSpace<>(tileSize, keys, includeDiagonal);
-        } else {
-            return new HilbertCurveIndexSpace<>(keys, tileSize * tileSize, includeDiagonal);
-        }
+        return leafs;
     }
 
     private Profiler createProfiler(RocketLauncherArgs args, String hostName, Communicator communicator) throws IOException, NoSuitableExecutorException {
@@ -231,7 +222,7 @@ public class RocketLauncher<K, R> {
                 || args.profileEventsCache
                 || args.profileEventsAggregate
                 || args.profileTraceAggregate
-                || args.profileCorrelations
+                || args.profileTasks
                 || args.profileTrace);
         String file = args.profileFile;
 
@@ -255,7 +246,7 @@ public class RocketLauncher<K, R> {
                 args.profileTrace,
                 args.profileEventsAll,
                 args.profileEventsCache,
-                args.profileCorrelations);
+                args.profileTasks);
 
         if (args.profileEventsAggregate || args.profileTraceAggregate) {
             p = new AggregateProfiler(p, target, args.profileEventsAggregate, args.profileTraceAggregate);
@@ -268,7 +259,7 @@ public class RocketLauncher<K, R> {
             throws ConstellationCreationException, NoSuitableExecutorException, InterruptedException {
 
         ArrayList<ConstellationConfiguration> configs = new ArrayList<>();
-        configs.addAll(CorrelationsCollectActivity.getConfigurations());
+        configs.addAll(ResultsCollectActivity.getConfigurations());
         configs.addAll(Communicator.getConfigurations());
         configs.addAll(MasterProfiler.getConfigurations());
 
@@ -276,8 +267,8 @@ public class RocketLauncher<K, R> {
             configs.add(
                     new ConstellationConfiguration(
                             new OrContext(
-                                new Context(CorrelationsMatrixActivity.LABEL),
-                                new Context(CorrelationsLeafActivity.LABEL)
+                                new Context(HierarchicalActivity.LABEL),
+                                new Context(LeafActivity.LABEL)
                             ),
                             StealPool.WORLD,
                             StealPool.WORLD,
@@ -298,30 +289,47 @@ public class RocketLauncher<K, R> {
         return new Communicator(c, props);
     }
 
-    private CorrelationList<K, R> computeCorrelations(Communicator c, IndexSpace<K> root) throws NoSuitableExecutorException {
-        int total = root.size();
-
+    private List<R> submitRoot(Communicator c, HierarchicalTask<R> task) throws NoSuitableExecutorException {
         // Launch collector on master
-        CorrelationsCollectActivity collector = new CorrelationsCollectActivity(total);
+        ResultsCollectActivity collector = new ResultsCollectActivity();
         ActivityIdentifier collectorId = c.submit(collector);
 
-        // Launch initial matrix activity
-        Activity activity = new CorrelationsMatrixActivity<K, R>(collectorId, root, 0);
-        c.submit(activity);
+        // Launch task to collect result of root
+        SingleEventCollector root = new SingleEventCollector(new Context(HierarchicalActivity.LABEL));
+        ActivityIdentifier rootId = c.submit(root);
 
-        return collector.waitUntilDone();
+        // Launch initial matrix activity
+        c.submit(new HierarchicalActivity<R>(rootId, collectorId, task, 0));
+
+        // Wait until all results have been collected
+        int totalResults = (Integer) root.waitForEvent().getData();
+        return collector.waitUntilDone(totalResults);
     }
 
-    public CorrelationList<K, R> run(K[] keys, boolean includeDiagonal) throws Exception {
+
+    public <K> List<R> run(K[] keys, boolean includeDiagonal, CorrelationSpawner<K, R> spawner) throws Exception {
+        int tileSize = args.minimumTileSize;
+        HierarchicalTask<R> root;
+
+        if (args.tileScheduling) {
+            root = new TilingIndexTask<>(spawner, tileSize, keys, includeDiagonal);
+        } else {
+            root = new HilbertIndexTask<>(spawner, keys, tileSize * tileSize, includeDiagonal);
+        }
+
+        return run(root);
+    }
+
+    public List<R> run(HierarchicalTask<R> root) throws Exception {
         printArguments();
 
         // Prepare CUDA
         CudaDevice[] devices = parseDeviceList();
         int n = devices.length;
         CudaContext[] contexts = new CudaContext[n];
-        ApplicationContext<K, R>[] funs = new ApplicationContext[n];
-        DeviceWorker<K, R>[] workers = new DeviceWorker[n];
-        HostWorker<K>  hworker = null;
+        ApplicationContext[] funs = new ApplicationContext[n];
+        worker.DeviceWorker<R>[] workers = new worker.DeviceWorker[n];
+        worker.HostWorker hworker = null;
         HostCache hcache = null;
 
         Optional<FileCache> fcache = Optional.empty();
@@ -379,7 +387,7 @@ public class RocketLauncher<K, R> {
                             entrySize);
                 }
 
-                hworker = new HostWorker<K>(
+                hworker = new worker.HostWorker(
                         fs,
                         profiler,
                         Optional.ofNullable(hcache),
@@ -399,7 +407,7 @@ public class RocketLauncher<K, R> {
                     entrySize);
 
             logger.info("creating worker");
-            workers[i] = new DeviceWorker<K, R>(
+            workers[i] = new worker.DeviceWorker<R>(
                     hworker,
                     profiler,
                     contexts[i],
@@ -417,15 +425,11 @@ public class RocketLauncher<K, R> {
 
             logger.trace("registering workers");
             for (int i = 0; i < n; i++) {
-                CorrelationsLeafActivity.registerWorker(comm, workers[i]);
+                LeafActivity.registerWorker(comm, workers[i]);
             }
 
-            IndexSpace<K> root = null;
-            CorrelationList<K, R> result = null;
+            List<R> result = null;
 
-            if (comm.isMaster()) {
-                root = createIndexSpace(keys, includeDiagonal);
-            }
 
             // Print benchmark results
             printInfos(root, contexts, funs, comm);
@@ -433,7 +437,7 @@ public class RocketLauncher<K, R> {
             // Launch application!
             if (comm.isMaster()) {
                 long start = System.nanoTime();
-                result = computeCorrelations(comm, root);
+                result = submitRoot(comm, root);
                 long end = System.nanoTime();
 
                 logger.info("computing similarity scores took {} seconds.", (end - start) / 1e9);
@@ -451,7 +455,7 @@ public class RocketLauncher<K, R> {
             comm.shutdown();
 
             // Destroy all workers
-            for (DeviceWorker w: workers) {
+            for (worker.DeviceWorker w: workers) {
                 w.cleanup();
             }
             hworker.cleanup();
@@ -482,7 +486,7 @@ public class RocketLauncher<K, R> {
         logger.info(" -- distributed cache: {}", args.distributedCache ? "enabled" : "disabled");
         logger.info(" -- file cache: {}", !args.fileCacheDirectory.isBlank());
 
-        boolean enabled = args.profileCorrelations ||
+        boolean enabled = args.profileTasks ||
                 args.profileTraceAggregate ||
                 args.profileTrace ||
                 args.profileEventsCache ||
@@ -493,7 +497,7 @@ public class RocketLauncher<K, R> {
 
         if (enabled) {
             logger.info(" -- profile file: {}", args.profileFile);
-            logger.info(" -- profile correlations: {}", args.profileCorrelations);
+            logger.info(" -- profile correlations: {}", args.profileTasks);
             logger.info(" -- profile events: {}", args.profileEventsAll ? "true" : args.profileEventsCache ? "only cache" : "false");
             logger.info(" -- profile tasks: {}", args.profileTrace);
             logger.info(" -- aggregate tasks: {}", args.profileTraceAggregate);
@@ -552,9 +556,9 @@ public class RocketLauncher<K, R> {
     }
 
     private void printInfos(
-            IndexSpace<K> root,
+            HierarchicalTask<R> root,
             CudaContext[] contexts,
-            ApplicationContext<K, R>[] funs,
+            ApplicationContext[] funs,
             Communicator comm
     ) throws UnknownHostException, NoSuitableExecutorException {
         int n = contexts.length;
@@ -566,20 +570,20 @@ public class RocketLauncher<K, R> {
         }
 
         if (performBenchmark) {
-            final List<Tuple<K, K>> corrs;
+            final List<LeafTask<R>> tasks;
 
             if (comm.isMaster()) {
-                List<Tuple<K, K>> c = extractCorrelations(root);
+                List<LeafTask<R>> c = extractLeafs(root);
                 Collections.shuffle(c);
-                corrs = new ArrayList<>(c.subList(0, Math.min(1000, c.size())));
+                tasks = new ArrayList<>(c.subList(0, Math.min(1000, c.size())));
 
-                comm.broadcast(corrs);
+                comm.broadcast(tasks);
             } else {
-                corrs = comm.broadcast(null);
+                tasks = comm.broadcast();
             }
 
             for (int i = 0; i < n; i++) {
-                runBenchmark(devInfos[i], contexts[i], funs[i], corrs);
+                runBenchmark(devInfos[i], contexts[i], funs[i], tasks);
             }
         }
 
@@ -614,8 +618,8 @@ public class RocketLauncher<K, R> {
                                 devInfo.parsingTime, 1.0 / devInfo.parsingTime);
                         logger.info("   - preprocessing: {} sec (throughput: {})",
                                 devInfo.preprocessingTime, 1.0 / devInfo.preprocessingTime);
-                        logger.info("   - correlation: {} sec (throughput: {})",
-                                devInfo.correlationTime, 1.0 / devInfo.correlationTime);
+                        logger.info("   - tasks: {} sec (throughput: {})",
+                                devInfo.execTime, 1.0 / devInfo.execTime);
 
                     }
                 }

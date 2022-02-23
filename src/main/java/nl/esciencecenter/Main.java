@@ -8,7 +8,7 @@ import java.util.Arrays;
 public class Main {
     public static void printUsage() {
         System.out.println("Usage: [PROGRAM] [OPTION]...");
-        System.out.println(" Where PROGRAM is either 'microscopy', 'radio', 'csi', or 'genetics");
+        System.out.println(" Where PROGRAM is either 'microscopy', 'radio', 'csi', or 'genetics'");
     }
 
     public static void main(final String[] argv) throws Exception {
@@ -28,6 +28,8 @@ public class Main {
             nl.esciencecenter.common_source_identification.Main.main(tail);
         } else if (head.equals("g") || head.equals("genetics")) {
             nl.esciencecenter.phylogenetics_analysis.Main.main(tail);
+        } else if (head.equals("d") || head.equals("dummy")) {
+            nl.esciencecenter.dummy.Main.main(tail);
         } else {
             printUsage();
         }

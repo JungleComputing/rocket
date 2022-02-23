@@ -1,5 +1,7 @@
 package nl.esciencecenter.rocket.profiling;
 
+import nl.esciencecenter.rocket.types.LeafTask;
+
 import java.util.function.Supplier;
 
 public class DummyProfiler implements Profiler {
@@ -11,7 +13,7 @@ public class DummyProfiler implements Profiler {
     };
 
     @Override
-    public Profiler.Record traceCorrelation(String actor, String left, String right) {
+    public Profiler.Record traceCorrelation(String actor, LeafTask task) {
         return DUMMY_RECORD;
     }
 

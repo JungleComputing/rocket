@@ -12,7 +12,6 @@ import nl.esciencecenter.rocket.cubaapi.CudaMemByte;
 import nl.esciencecenter.rocket.cubaapi.CudaMemInt;
 import nl.esciencecenter.rocket.cubaapi.CudaPinned;
 import nl.esciencecenter.rocket.util.Correlation;
-import nl.esciencecenter.rocket.util.CorrelationList;
 import nl.esciencecenter.rocket.util.FileSystemFactory;
 import nl.esciencecenter.rocket.util.Util;
 import nl.esciencecenter.xenon.filesystems.FileSystem;
@@ -79,7 +78,7 @@ public class Main {
         Path largestNFile = files[0];
 
         for (Path file: files) {
-            try (InputStream fileStream = fs.readFromFile(file)) {
+            try (InputStream fileStream = Util.readFile(fs, file)) {
                 InputStream stream = new BufferedInputStream(fileStream);
 
                 if (file.getFileNameAsString().toLowerCase().endsWith(".gz")) {
@@ -184,7 +183,7 @@ public class Main {
             args.maxVectorSize = 1000000;
         }
 
-        RocketLauncher<SequenceIdentifier, Double> launcher = new RocketLauncher<>(args, fs, context -> {
+        RocketLauncher<Correlation<SequenceIdentifier, Double>> launcher = new RocketLauncher<>(args, fs, context -> {
             return new SequenceAnalysisContext(
                     context,
                     args.alphabet,
@@ -193,7 +192,11 @@ public class Main {
                     args.maxInputSize);
         });
 
-        CorrelationList<SequenceIdentifier, Double> results = launcher.run(identifiers, true);
+        List<Correlation<SequenceIdentifier, Double>> results = launcher.run(
+                identifiers,
+                true,
+                new SequenceAnalysisContext.Spawner()
+        );
 
         // master only write output
         if (results != null) {
@@ -203,7 +206,7 @@ public class Main {
 
     private static void writeOutput(
             String outputFile,
-            CorrelationList<SequenceIdentifier, Double> results
+            List<Correlation<SequenceIdentifier, Double>> results
     ) throws IOException {
         HashMap<SequenceIdentifier, Integer> mapping = new HashMap<>();
         JSONArray keys = new JSONArray();

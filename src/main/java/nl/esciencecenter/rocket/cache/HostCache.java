@@ -3,6 +3,7 @@ package nl.esciencecenter.rocket.cache;
 import jcuda.CudaException;
 import nl.esciencecenter.rocket.cubaapi.CudaContext;
 import nl.esciencecenter.rocket.cubaapi.CudaPinned;
+import nl.esciencecenter.rocket.types.HashableKey;
 
 import java.util.ArrayDeque;
 import java.util.Optional;
@@ -42,7 +43,7 @@ public class HostCache extends AbstractCache<CudaPinned, Long> {
     }
 
     @Override
-    protected Optional<CudaPinned> createBuffer(String key) {
+    protected Optional<CudaPinned> createBuffer(HashableKey key) {
         return Optional.ofNullable(buffers.poll());
     }
 

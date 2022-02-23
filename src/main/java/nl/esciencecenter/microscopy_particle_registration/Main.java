@@ -9,7 +9,6 @@ import nl.esciencecenter.microscopy_particle_registration.kernels.expdist.ExpDis
 import nl.esciencecenter.rocket.RocketLauncher;
 import nl.esciencecenter.rocket.RocketLauncherArgs;
 import nl.esciencecenter.rocket.util.Correlation;
-import nl.esciencecenter.rocket.util.CorrelationList;
 import nl.esciencecenter.rocket.util.FileSystemFactory;
 import nl.esciencecenter.rocket.util.Util;
 import nl.esciencecenter.xenon.filesystems.FileSystem;
@@ -24,8 +23,9 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
+import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Comparator;
+import java.util.Collections;
 import java.util.List;
 
 import static nl.esciencecenter.rocket.util.Util.stream;
@@ -107,7 +107,7 @@ public class Main {
                 .map(ParticleIdentifier::getNumberOfPoints)
                 .reduce(0, Math::max);
 
-        RocketLauncher<ParticleIdentifier, ParticleMatching> launcher = new RocketLauncher<>(largs, fs, context -> {
+        RocketLauncher<Correlation<ParticleIdentifier, ParticleMatching>> launcher = new RocketLauncher<>(largs, fs, context -> {
             return new ParticleRegistrationContext(
                     context,
                     new PairFitting(context, args.scale, args.tolerance, args.maxIterations, maxSize),
@@ -115,14 +115,19 @@ public class Main {
                     maxSize);
         });
 
-        CorrelationList<ParticleIdentifier, ParticleMatching> results = launcher.run(identifiers, true);
+        List<Correlation<ParticleIdentifier, ParticleMatching>> results = launcher.run(
+                identifiers,
+                true,
+                new ParticleRegistrationContext.Spawner()
+        );
 
         // master only write output
         if (results != null) {
             logger.info("writing output to {}", outputFile);
 
             JSONArray array = new JSONArray();
-            List<Correlation<ParticleIdentifier, ParticleMatching>> sorted = results.toList(Comparator.naturalOrder());
+            List<Correlation<ParticleIdentifier, ParticleMatching>> sorted = new ArrayList<>(results);
+            Collections.sort(sorted);
 
             for (Correlation<ParticleIdentifier, ParticleMatching> c: sorted) {
                 String i = c.getI().getPath();

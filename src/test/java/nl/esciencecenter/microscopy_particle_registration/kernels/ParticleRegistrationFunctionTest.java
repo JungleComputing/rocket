@@ -67,7 +67,7 @@ public class ParticleRegistrationFunctionTest {
         da.copyFromHost(a);
         db.copyFromHost(b);
 
-        //registrationFunction.correlateGPU(
+        //registrationFunction.execute(
         //        new ParticleIdentifier("", m),
         //        da,
         //        new ParticleIdentifier("", n),

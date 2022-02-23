@@ -8,8 +8,12 @@ import nl.esciencecenter.rocket.cubaapi.CudaContext;
 import nl.esciencecenter.rocket.cubaapi.CudaMem;
 import nl.esciencecenter.rocket.cubaapi.CudaMemDouble;
 import nl.esciencecenter.rocket.cubaapi.CudaStream;
-import nl.esciencecenter.rocket.scheduler.ApplicationContext;
+import nl.esciencecenter.rocket.indexspace.CorrelationSpawner;
+import nl.esciencecenter.rocket.types.ApplicationContext;
 import nl.esciencecenter.microscopy_particle_registration.kernels.expdist.ExpDist;
+import nl.esciencecenter.rocket.types.InputTask;
+import nl.esciencecenter.rocket.types.LeafTask;
+import nl.esciencecenter.rocket.util.Correlation;
 import nl.esciencecenter.xenon.filesystems.Path;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -22,8 +26,9 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.DoubleBuffer;
+import java.util.List;
 
-public class ParticleRegistrationContext implements ApplicationContext<ParticleIdentifier, ParticleMatching> {
+public class ParticleRegistrationContext implements ApplicationContext {
     protected static final Logger logger = LogManager.getLogger();
 
     final static private Vec[] INITIAL_GUESSES = new Vec[]{
@@ -65,113 +70,165 @@ public class ParticleRegistrationContext implements ApplicationContext<ParticleI
         return 4 * Sizeof.DOUBLE; // Output is (score, translate_x, translate_y, rotation)
     }
 
-    @Override
-    public Path[] getInputFiles(ParticleIdentifier key) {
-        return new Path[]{
-                new Path(key.getPath())
-        };
+    public Input getInput(ParticleIdentifier key) {
+        return new Input(key);
     }
 
-    @Override
-    public long parseFiles(ParticleIdentifier key, ByteBuffer[] inputs, ByteBuffer buffer) {
-        logger.trace("start parsing {}", key);
-        ByteArrayInputStream stream = new ByteArrayInputStream(inputs[0].array());
-        JSONArray object = new JSONArray(new JSONTokener(stream));
+    static class Input implements InputTask {
+        private ParticleIdentifier key;
 
-        int n = object.length();
-        double[] pos = new double[2 * n];
-        double[] sigma = new double[n];
-
-        // Read records
-        for (int i = 0; i < n; i++) {
-            JSONObject record = object.getJSONObject(i);
-            pos[2 * i + 0] = record.getDouble("x");
-            pos[2 * i + 1] = record.getDouble("y");
-            sigma[i] = record.getDouble("localization_uncertainty");
+        Input(ParticleIdentifier key) {
+            this.key = key;
         }
 
-        // Write to buffer
-        buffer.order(ByteOrder.LITTLE_ENDIAN);
-        DoubleBuffer dbuffer = buffer.asDoubleBuffer();
-        dbuffer.clear(); // This sets position to zero, does not actually clear anything
-        dbuffer.put(pos);
-        dbuffer.put(sigma);
+        @Override
+        public Path[] getInputs() {
+            return new Path[]{
+                    new Path(key.getPath())
+            };
+        }
 
-        return dbuffer.position() * Sizeof.DOUBLE;
-    }
+        @Override
+        public ParticleIdentifier getKey() {
+            return key;
+        }
 
-    @Override
-    public long preprocessInputGPU(ParticleIdentifier s, CudaMem input, CudaMem output) {
-        output.asBytes().copyFromDevice(input.asBytes());
-        return input.sizeInBytes();
-    }
+        @Override
+        public long preprocess(ByteBuffer[] inputs, ByteBuffer buffer) {
+            logger.trace("start parsing {}", key);
+            ByteArrayInputStream stream = new ByteArrayInputStream(inputs[0].array());
+            JSONArray object = new JSONArray(new JSONTokener(stream));
 
-    @Override
-    public long correlateGPU(
-            ParticleIdentifier left,
-            CudaMem leftMem,
-            ParticleIdentifier right,
-            CudaMem rightMem,
-            CudaMem outputMem
-    ) {
-        logger.trace("start correlating {} x {}", left, right);
-        int m = left.getNumberOfPoints();
-        int n = right.getNumberOfPoints();
-        CudaMemDouble model = leftMem.asDoubles().slice(0, 2 * m);
-        CudaMemDouble scene = rightMem.asDoubles().slice(0, 2 * n);
-        CudaMemDouble modelSigmas = leftMem.asDoubles().slice(2 * m, m);
-        CudaMemDouble sceneSigmas = rightMem.asDoubles().slice(2 * n, n);
+            int n = object.length();
+            double[] pos = new double[2 * n];
+            double[] sigma = new double[n];
 
-        double bestScore = Double.NEGATIVE_INFINITY;
-        Vec bestParam = new DenseVector(3);
-        Vec outputParam = new DenseVector(3);
-
-        for (Vec guessParam: INITIAL_GUESSES) {
-            pairFitting.applyGPU(
-                    model,
-                    scene,
-                    guessParam.clone(),
-                    outputParam);
-
-            double score = expDist.applyGPU(
-                    model,
-                    scene,
-                    outputParam.get(0),
-                    outputParam.get(1),
-                    outputParam.get(2),
-                    modelSigmas,
-                    sceneSigmas);
-
-            if (score > bestScore) {
-                bestParam = outputParam.clone();
-                bestScore = score;
+            // Read records
+            for (int i = 0; i < n; i++) {
+                JSONObject record = object.getJSONObject(i);
+                pos[2 * i + 0] = record.getDouble("x");
+                pos[2 * i + 1] = record.getDouble("y");
+                sigma[i] = record.getDouble("localization_uncertainty");
             }
+
+            // Write to buffer
+            buffer.order(ByteOrder.LITTLE_ENDIAN);
+            DoubleBuffer dbuffer = buffer.asDoubleBuffer();
+            dbuffer.clear(); // This sets position to zero, does not actually clear anything
+            dbuffer.put(pos);
+            dbuffer.put(sigma);
+
+            return dbuffer.position() * Sizeof.DOUBLE;
         }
 
-        double[] result = new double[]{
-                bestScore,
-                bestParam.get(0),
-                bestParam.get(1),
-                bestParam.get(2)
-        };
-
-        outputMem.asDoubles().copyFromHostAsync(result, stream);
-        stream.synchronize();
-        logger.trace("finish correlating {} x {}", left, right);
-
-        return outputMem.sizeInBytes();
+        @Override
+        public long execute(ApplicationContext context, CudaMem input, CudaMem output) {
+            output.asBytes().copyFromDevice(input.asBytes());
+            return input.sizeInBytes();
+        }
     }
 
-    @Override
-    public ParticleMatching postprocessOutput(ParticleIdentifier left, ParticleIdentifier right, ByteBuffer buffer) {
-        DoubleBuffer dbuffer = buffer.order(ByteOrder.LITTLE_ENDIAN).asDoubleBuffer();
+    static class Task implements LeafTask<Correlation<ParticleIdentifier, ParticleMatching>> {
+        private ParticleIdentifier left;
+        private ParticleIdentifier right;
 
-        return new ParticleMatching(
-                dbuffer.get(0),
-                dbuffer.get(1),
-                dbuffer.get(2),
-                dbuffer.get(3)
-        );
+        Task(ParticleIdentifier left, ParticleIdentifier right) {
+            this.left = left;
+            this.right = right;
+        }
+
+        @Override
+        public List<InputTask> getInputs() {
+            return List.of(new Input(left), new Input(right));
+        }
+
+        @Override
+        public long execute(
+                ApplicationContext context,
+                CudaMem[] inputs,
+                CudaMem outputMem
+        ) {
+            ParticleRegistrationContext c = (ParticleRegistrationContext) context;
+
+            logger.trace("start correlating {} x {}", left, right);
+            int m = left.getNumberOfPoints();
+            int n = right.getNumberOfPoints();
+            CudaMemDouble model = inputs[0].asDoubles().slice(0, 2 * m);
+            CudaMemDouble scene = inputs[1].asDoubles().slice(0, 2 * n);
+            CudaMemDouble modelSigmas = inputs[0].asDoubles().slice(2 * m, m);
+            CudaMemDouble sceneSigmas = inputs[1].asDoubles().slice(2 * n, n);
+
+            double bestScore = Double.NEGATIVE_INFINITY;
+            Vec bestParam = new DenseVector(3);
+            Vec outputParam = new DenseVector(3);
+
+            for (Vec guessParam : INITIAL_GUESSES) {
+                c.pairFitting.applyGPU(
+                        model,
+                        scene,
+                        guessParam.clone(),
+                        outputParam);
+
+                double score = c.expDist.applyGPU(
+                        model,
+                        scene,
+                        outputParam.get(0),
+                        outputParam.get(1),
+                        outputParam.get(2),
+                        modelSigmas,
+                        sceneSigmas);
+
+                if (score > bestScore) {
+                    bestParam = outputParam.clone();
+                    bestScore = score;
+                }
+            }
+
+            double[] result = new double[]{
+                    bestScore,
+                    bestParam.get(0),
+                    bestParam.get(1),
+                    bestParam.get(2)
+            };
+
+            outputMem.asDoubles().copyFromHostAsync(result, c.stream);
+            c.stream.synchronize();
+            logger.trace("finish correlating {} x {}", left, right);
+
+            return outputMem.sizeInBytes();
+        }
+
+        @Override
+        public Correlation<ParticleIdentifier, ParticleMatching> postprocess(
+                ApplicationContext context,
+                ByteBuffer buffer
+        ) {
+            DoubleBuffer dbuffer = buffer.order(ByteOrder.LITTLE_ENDIAN).asDoubleBuffer();
+            ParticleMatching result = new ParticleMatching(
+                    dbuffer.get(0),
+                    dbuffer.get(1),
+                    dbuffer.get(2),
+                    dbuffer.get(3)
+            );
+
+            return new Correlation<>(left, right, result);
+        }
+
+        @Override
+        public String toString() {
+            return left + " x " + right;
+        }
+    }
+
+    static class Spawner implements CorrelationSpawner<ParticleIdentifier, Correlation<ParticleIdentifier, ParticleMatching>> {
+        Spawner() {
+            //
+        }
+
+        @Override
+        public LeafTask<Correlation<ParticleIdentifier, ParticleMatching>> spawn(ParticleIdentifier left, ParticleIdentifier right) {
+            return new Task(left, right);
+        }
     }
 
     @Override

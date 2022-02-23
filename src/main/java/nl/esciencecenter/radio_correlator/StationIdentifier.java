@@ -1,12 +1,12 @@
 package nl.esciencecenter.radio_correlator;
 
-import nl.esciencecenter.common_source_identification.ImageIdentifier;
+import nl.esciencecenter.rocket.types.HashableKey;
 
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.util.Objects;
 
-public class StationIdentifier {
+public class StationIdentifier implements HashableKey {
     private static final long serialVersionUID = 8341483315405170456L;
 
     private String path;
@@ -42,5 +42,11 @@ public class StationIdentifier {
     private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
         in.defaultReadObject();
         path = path.intern();
+    }
+
+    @Override
+    public int compareTo(HashableKey that) {
+        if (that == null || !(that instanceof StationIdentifier)) return 0;
+        return this.path.compareTo(((StationIdentifier) that).path);
     }
 }

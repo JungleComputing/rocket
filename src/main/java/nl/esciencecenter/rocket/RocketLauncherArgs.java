@@ -51,7 +51,7 @@ public class RocketLauncherArgs {
     public boolean profileEventsCache = false;
 
     @Parameter(names="--profile-correlations", description="Trace correlations.")
-    public boolean profileCorrelations = false;
+    public boolean profileTasks = false;
 
     @Parameter(names="--profile-tasks", description="Trace all tasks. This is expensive and will affect performance.")
     public boolean profileTrace = false;

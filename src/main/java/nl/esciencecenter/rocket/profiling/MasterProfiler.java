@@ -9,37 +9,24 @@ import ibis.constellation.Event;
 import ibis.constellation.NoSuitableExecutorException;
 import ibis.constellation.StealPool;
 import ibis.constellation.StealStrategy;
-import ibis.constellation.util.MemorySizes;
 import nl.esciencecenter.rocket.activities.Communicator;
-import nl.esciencecenter.rocket.util.Tuple;
+import nl.esciencecenter.rocket.types.InputTask;
+import nl.esciencecenter.rocket.types.LeafTask;
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.BufferedOutputStream;
-import java.io.BufferedWriter;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.io.OutputStreamWriter;
 import java.io.Serializable;
-import java.io.Writer;
-import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.zip.Deflater;
 import java.util.zip.GZIPOutputStream;
-
-import static nl.esciencecenter.rocket.profiling.DummyProfiler.DUMMY_RECORD;
 
 public class MasterProfiler implements Profiler {
     protected static final Logger logger = LogManager.getLogger();
@@ -226,17 +213,20 @@ public class MasterProfiler implements Profiler {
     }
 
     @Override
-    public Profiler.Record traceCorrelation(String actor, String left, String right) {
+    public Profiler.Record traceCorrelation(String actor, LeafTask task) {
         long before = System.nanoTime() - globalStart;
 
         return () -> {
             long after = System.nanoTime() - globalStart;
-            String record = String.format("%s\t%s\t%s\t%d\t%d\t%s\t%s",
+            String record = String.format("%s\t%s\t%s\t%d\t%d",
                     hostName,
                     actor,
                     "correlation",
-                    before, after,
-                    left, right);
+                    before, after);
+
+            for (InputTask input: (List<InputTask>) task.getInputs()) {
+                record = String.format("%s\t%s", record, input.getKey());
+            }
 
             appendRecord(record);
         };

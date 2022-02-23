@@ -23,10 +23,6 @@
  * @version 0.2
  */
 
-// Should be a power of two!!
-#ifndef block_size_x
-#define block_size_x 256
-#endif
 
 
 
@@ -151,13 +147,15 @@ __global__ void computeSums(
     double sumxy = 0.0;
 
     for (int i=_x; i < n; i+=step_size) {
-        float v = x[i];
-        float w = y[i];
+        double v = x[i];
+        double w = y[i];
+
         sumx += v;
-        sumxx += v * v;
         sumy += w;
-        sumyy += w * w;
-        sumxy += v * w;
+
+        sumxx = fma(v, v, sumxx);
+        sumyy = fma(w, w, sumyy);
+        sumxy = fma(v, w, sumxy);
     }
 
     //reduce local sums

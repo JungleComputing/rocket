@@ -1,13 +1,10 @@
 package nl.esciencecenter.microscopy_particle_registration;
 
-import nl.esciencecenter.common_source_identification.ImageIdentifier;
+import nl.esciencecenter.rocket.types.HashableKey;
 
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.Serializable;
 import java.util.Objects;
 
-public class ParticleIdentifier implements Serializable, Comparable<ParticleIdentifier> {
+public class ParticleIdentifier implements HashableKey {
     private static final long serialVersionUID = 1041546049524125024L;
 
     private int index;
@@ -53,7 +50,8 @@ public class ParticleIdentifier implements Serializable, Comparable<ParticleIden
     }
 
     @Override
-    public int compareTo(ParticleIdentifier that) {
-        return this.path.compareTo(that.path);
+    public int compareTo(HashableKey that) {
+        if (that == null || getClass() != that.getClass()) return 0;
+        return this.path.compareTo(((ParticleIdentifier) that).path);
     }
 }

@@ -10,14 +10,16 @@ import jcuda.runtime.JCuda;
 import jcuda.driver.*;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 
 /**
  * This class is performs a Normalized Cross Correlation on the GPU
  */
 public class NormalizedCrossCorrelation implements PatternComparator {
-    private static int threads = 256;
-    private static int reducing_thread_blocks = 1024; //optimally this equals the number of SMs in the GPU
+    private int reducing_thread_blocks; //optimally this equals the number of SMs in the GPU
 
     //cuda handles
     protected CudaModule _module;
@@ -48,10 +50,26 @@ public class NormalizedCrossCorrelation implements PatternComparator {
      */
     public NormalizedCrossCorrelation(int h, int w, CudaContext context, String... compileArgs)
             throws CudaException, IOException {
+        this(h, w, 256, 1024, context, compileArgs);
+    }
+
+    public NormalizedCrossCorrelation(int h, int w, int threadsPerBlock, int reducingThreads, CudaContext context, String... compileArgs)
+            throws CudaException, IOException {
         JCudaDriver.setExceptionsEnabled(true);
-        _module = context.compileModule(getClass().getResource("normalizedcrosscorrelation.cu"), compileArgs);
+
+        ArrayList<String> cargs = new ArrayList<>();
+        Collections.addAll(cargs, compileArgs);
+        Collections.addAll(cargs, "-D", "block_size_x=" + threadsPerBlock);
+        compileArgs = cargs.toArray(compileArgs);
+
+        _module = context.compileModule(
+                getClass().getResource("normalizedcrosscorrelation.cu"),
+                compileArgs);
         _context = context;
         _stream = new CudaStream();
+
+        reducing_thread_blocks = reducingThreads;
+
         this.h = h;
         this.w = w;
 
@@ -65,10 +83,10 @@ public class NormalizedCrossCorrelation implements PatternComparator {
         _partialXY = context.allocDoubles(reducing_thread_blocks);
 
         _computeSums = _module.getFunction("computeSums");
-        _computeSums.setDim(reducing_thread_blocks, threads);
+        _computeSums.setDim(reducing_thread_blocks, threadsPerBlock);
 
         _computeNCC = _module.getFunction("computeNCC");
-        _computeNCC.setDim(1, threads);
+        _computeNCC.setDim(1, threadsPerBlock);
     }
 
     public long getInputSize() {

@@ -3,6 +3,7 @@ package nl.esciencecenter.rocket.cache;
 import jcuda.CudaException;
 import nl.esciencecenter.rocket.cubaapi.CudaContext;
 import nl.esciencecenter.rocket.cubaapi.CudaMemByte;
+import nl.esciencecenter.rocket.types.HashableKey;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -52,7 +53,7 @@ public class DeviceCache extends AbstractCache<CudaMemByte, Long> {
     }
 
     @Override
-    protected Optional<CudaMemByte> createBuffer(String key) {
+    protected Optional<CudaMemByte> createBuffer(HashableKey key) {
         return Optional.ofNullable(buffers.poll());
     }
 

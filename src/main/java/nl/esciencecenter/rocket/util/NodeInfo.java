@@ -12,7 +12,7 @@ public class NodeInfo implements Serializable {
         public double loadingTime;
         public double parsingTime;
         public double preprocessingTime;
-        public double correlationTime;
+        public double execTime;
 
         public DeviceInfo(CudaContext context) {
             name = context.getDevice().getName();

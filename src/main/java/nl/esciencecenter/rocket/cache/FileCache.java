@@ -1,5 +1,6 @@
 package nl.esciencecenter.rocket.cache;
 
+import nl.esciencecenter.rocket.types.HashableKey;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -96,12 +97,12 @@ public class FileCache extends AbstractCache<FileCache.Slot, Long> {
     }
 
     @Override
-    protected Optional<Slot> createBuffer(String key) {
+    protected Optional<Slot> createBuffer(HashableKey key) {
         if (numFiles >= maxFiles) {
             return Optional.empty();
         }
 
-        Path path = tempDir.resolve(safeFileName(key));
+        Path path = tempDir.resolve(safeFileName(key.toString()));
 
         try {
             Files.createFile(path);

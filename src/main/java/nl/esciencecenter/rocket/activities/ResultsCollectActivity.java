@@ -10,28 +10,23 @@ import ibis.constellation.NoSuitableExecutorException;
 import ibis.constellation.StealPool;
 import ibis.constellation.StealStrategy;
 import ibis.constellation.util.SimpleActivity;
-import nl.esciencecenter.rocket.util.Correlation;
-import nl.esciencecenter.rocket.util.CorrelationList;
-import nl.esciencecenter.rocket.util.InternPool;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
-public class CorrelationsCollectActivity<K, R> extends Activity {
+public class ResultsCollectActivity<R extends Comparable<? super R>> extends Activity {
     protected static final Logger logger = LogManager.getLogger();
 
-    final private static String LABEL = "CorrelationsCollectActivity";
+    final private static String LABEL = "ResultsCollectActivity";
     final private int PERIOD = 5000; // 5 second
 
     static public List<ConstellationConfiguration> getConfigurations() {
         return Collections.singletonList(
                 new ConstellationConfiguration(
-                    new Context(CorrelationsCollectActivity.LABEL),
+                    new Context(ResultsCollectActivity.LABEL),
                     StealPool.NONE,
                     StealPool.NONE,
                     StealStrategy.SMALLEST,
@@ -40,15 +35,15 @@ public class CorrelationsCollectActivity<K, R> extends Activity {
         );
     }
 
-    final static private List<Correlation<?, ?>> PENDING_SUBMISSION = new ArrayList<>();
+    final static private List<?> PENDING_SUBMISSION = new ArrayList<>();
 
-    static public void sendToMaster(Communicator comm, ActivityIdentifier id, Correlation<?, ?> corr) {
+    static public void sendToMaster(Communicator comm, ActivityIdentifier id, Object corr) {
         boolean isFirst;
 
         // Add entry to PENDING_SUBMISSION
         synchronized (PENDING_SUBMISSION) {
             isFirst = PENDING_SUBMISSION.isEmpty();
-            PENDING_SUBMISSION.add(corr);
+            ((List<Object>) PENDING_SUBMISSION).add(corr);
         }
 
         // If list was empty, launch an activity to submit the correlation at some moment in the future.
@@ -63,7 +58,7 @@ public class CorrelationsCollectActivity<K, R> extends Activity {
                             e.printStackTrace();
                         }
 
-                        List<Correlation<?, ?>> correlations;
+                        List<?> correlations;
                         synchronized (PENDING_SUBMISSION) {
                             correlations = new ArrayList<>(PENDING_SUBMISSION);
                             PENDING_SUBMISSION.clear();
@@ -78,42 +73,34 @@ public class CorrelationsCollectActivity<K, R> extends Activity {
         }
     }
 
-    final private int total;
-    final private InternPool<K> cachedKeys;
-    final private List<Correlation<K, R>> results;
+    final private List<R> results;
     private int prevProgress;
     private long startTime;
     private long prevTime;
 
-    public CorrelationsCollectActivity(int total) {
+    public ResultsCollectActivity() {
         super(new Context(LABEL), false, true);
-        this.total = total;
-        this.cachedKeys = new InternPool<>();
         this.results = new ArrayList<>();
     }
 
-    public CorrelationList<K, R> waitUntilDone() {
+    public List<R> waitUntilDone(int totalResults) {
         long sleep = 100;
-        long lastPrinted = 0;
 
         while (true) {
             // Break if done
             synchronized (this) {
-                if (results.size() == total) {
-                    return new CorrelationList<>(results);
+                if (results.size() == totalResults) {
+                    Collections.sort(results);
+                    return new ArrayList<>(results);
                 }
             }
 
             // Print progress if more than PERIOD seconds have past.
-            if (lastPrinted > PERIOD) {
-                lastPrinted -= PERIOD;
-                printProgress();
-            }
+            printProgress(totalResults);
 
             // Sleep for a bit.
             try {
                 Thread.sleep(sleep);
-                lastPrinted += sleep;
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             }
@@ -128,7 +115,7 @@ public class CorrelationsCollectActivity<K, R> extends Activity {
         return String.format("%02d:%02d:%05.2f", hours, minutes, milliseconds);
     }
 
-    private void printProgress() {
+    private void printProgress(int totalResults) {
         double ratio, throughput;
         long elapsed;
 
@@ -139,7 +126,11 @@ public class CorrelationsCollectActivity<K, R> extends Activity {
             long startTime = this.startTime;
             long prevTime = this.prevTime;
 
-            ratio = Math.min(1, progress / (double) total);
+            if (nowTime - prevTime < PERIOD) {
+                return;
+            }
+
+            ratio = Math.min(1, progress / (double) totalResults);
             elapsed = nowTime - startTime;
             throughput = (progress - prevProgress) / ((double)(nowTime - prevTime) / 1000.0);
 
@@ -164,24 +155,21 @@ public class CorrelationsCollectActivity<K, R> extends Activity {
         }
 
         logger.info("initializing timer");
-        return total > 0 ? SUSPEND : FINISH;
+        return SUSPEND;
     }
 
     @Override
     public int process(Constellation constellation, Event event) {
         synchronized (this) {
             @SuppressWarnings("unchecked")
-            Iterable<Correlation<K, R>> correlations = (Iterable<Correlation<K, R>>) event.getData();
+            Iterable<R> data = (Iterable<R>) event.getData();
 
-            for (Correlation<K, R> corr: correlations) {
-                K left = cachedKeys.intern(corr.getI());
-                K right = cachedKeys.intern(corr.getJ());
-                R coeff = corr.getCoefficient();
-
-                results.add(new Correlation<>(left, right, coeff));
+            for (R row: data) {
+                results.add(row);
             }
 
-            return results.size() < total ? SUSPEND : FINISH;
+            printProgress(1);
+            return SUSPEND;
         }
     }
 

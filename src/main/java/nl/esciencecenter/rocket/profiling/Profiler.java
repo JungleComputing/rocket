@@ -1,7 +1,6 @@
 package nl.esciencecenter.rocket.profiling;
 
-import org.apache.logging.log4j.LogManager;
-import org.json.JSONObject;
+import nl.esciencecenter.rocket.types.LeafTask;
 
 import java.util.function.Supplier;
 
@@ -14,7 +13,7 @@ public interface Profiler {
 
     public Record trace(String actor, String operation);
     public void report(String actor, String operation, long amount);
-    public Profiler.Record traceCorrelation(String actor, String left, String right);
+    public Profiler.Record traceCorrelation(String actor, LeafTask task);
 
     default public void report(String action) {
         report(action, 1);

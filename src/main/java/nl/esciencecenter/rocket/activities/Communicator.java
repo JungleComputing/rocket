@@ -11,17 +11,13 @@ import ibis.constellation.Event;
 import ibis.constellation.NoSuitableExecutorException;
 import ibis.constellation.StealPool;
 import ibis.constellation.StealStrategy;
-import ibis.constellation.util.FlexibleEventCollector;
 import ibis.constellation.util.SimpleActivity;
-import nl.esciencecenter.rocket.indexspace.IndexSpace;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.lang.reflect.Array;
-import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Queue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 public class Communicator {
@@ -214,6 +210,10 @@ public class Communicator {
             send(collectActivity.identifier(), masterActivityId, "");
             return (K) collectActivity.waitForEvent().getData();
         }
+    }
+
+    public <K> K broadcast() {
+        return broadcast((K) null);
     }
 
     public void barrier() {

@@ -5,6 +5,7 @@ import com.beust.jcommander.Parameter;
 import com.beust.jcommander.ParameterException;
 import nl.esciencecenter.rocket.RocketLauncher;
 import nl.esciencecenter.rocket.RocketLauncherArgs;
+import nl.esciencecenter.rocket.util.Correlation;
 import nl.esciencecenter.rocket.util.FileSystemFactory;
 import nl.esciencecenter.xenon.filesystems.FileSystem;
 import org.apache.logging.log4j.LogManager;
@@ -52,7 +53,7 @@ public class Main {
             identifiers[i] = new StationIdentifier(String.valueOf(i));
         }
 
-        RocketLauncher<StationIdentifier, float[]> launcher = new RocketLauncher<>(largs, fs, context -> {
+        RocketLauncher<Correlation<StationIdentifier, float[]>> launcher = new RocketLauncher<>(largs, fs, context -> {
              return new CorrelatorContext(context, numChannels, numTimes);
         });
     }

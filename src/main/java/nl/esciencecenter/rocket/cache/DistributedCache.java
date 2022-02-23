@@ -5,6 +5,7 @@ import ibis.ipl.IbisIdentifier;
 import ibis.ipl.ReadMessage;
 import ibis.ipl.WriteMessage;
 import nl.esciencecenter.rocket.profiling.Profiler;
+import nl.esciencecenter.rocket.types.HashableKey;
 import nl.esciencecenter.rocket.util.Future;
 import nl.junglecomputing.pidgin.ExplicitChannel;
 import nl.junglecomputing.pidgin.Pidgin;
@@ -315,11 +316,11 @@ public class DistributedCache {
 
     static private class LocalPendingRequest {
         final private UUID id;
-        final private String key;
+        final private HashableKey key;
         final private ByteBuffer buffer;
         final private Future<Optional<Long>> future;
 
-        private LocalPendingRequest(String key, ByteBuffer buffer) {
+        private LocalPendingRequest(HashableKey key, ByteBuffer buffer) {
             this.key = key;
             this.buffer = buffer;
             this.id = UUID.randomUUID();
@@ -329,9 +330,9 @@ public class DistributedCache {
 
     static private class RequestMsg implements Serializable  {
         final private UUID id;
-        final private String key;
+        final private HashableKey key;
 
-        private RequestMsg(UUID id, String key) {
+        private RequestMsg(UUID id, HashableKey key) {
             this.id = id;
             this.key = key;
         }
@@ -349,12 +350,12 @@ public class DistributedCache {
 
     static private class ForwardMsg implements Serializable {
         final private UUID id;
-        final private String key;
+        final private HashableKey key;
         final private IbisIdentifier originalSource;
         final private List<IbisIdentifier> nextHop;
         final private int hopCount;
 
-        private ForwardMsg(UUID id, String key, IbisIdentifier originalSource, List<IbisIdentifier> nextHop, int hopCount) {
+        private ForwardMsg(UUID id, HashableKey key, IbisIdentifier originalSource, List<IbisIdentifier> nextHop, int hopCount) {
             this.id = id;
             this.key = key;
             this.originalSource = originalSource;
@@ -375,7 +376,7 @@ public class DistributedCache {
     private Profiler profiler;
     private HostCache hostCache;
 
-    private final HashMap<String, List<IbisIdentifier>> candidates;
+    private final HashMap<HashableKey, List<IbisIdentifier>> candidates;
 
     public DistributedCache(String hostName, int mxHops) throws Exception {
         pidginName = "distcache_" + System.getProperty("ibis.pool.name");
@@ -409,11 +410,11 @@ public class DistributedCache {
         }
     }
 
-    private IbisIdentifier getOwner(String key) {
+    private IbisIdentifier getOwner(HashableKey key) {
         return peers[Math.abs(key.hashCode()) % peers.length];
     }
 
-    private List<IbisIdentifier> getAndPushCandidate(String key, IbisIdentifier source) {
+    private List<IbisIdentifier> getAndPushCandidate(HashableKey key, IbisIdentifier source) {
         synchronized (candidates) {
             List<IbisIdentifier> oldList = candidates.getOrDefault(key, new ArrayList<>());
             List<IbisIdentifier> newList = new ArrayList<>(maxHops);
@@ -446,7 +447,7 @@ public class DistributedCache {
     }
 
 
-    public Future<Optional<Long>> request(String key, ByteBuffer destBuffer) {
+    public Future<Optional<Long>> request(HashableKey key, ByteBuffer destBuffer) {
         LocalPendingRequest req = new LocalPendingRequest(key, destBuffer);
         requests.put(req.id, req);
 

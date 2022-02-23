@@ -1,8 +1,8 @@
 package nl.esciencecenter.rocket.cache;
 
+import nl.esciencecenter.rocket.types.HashableKey;
 import nl.esciencecenter.rocket.util.Future;
 import nl.esciencecenter.rocket.util.LRUQueue;
-import nl.esciencecenter.rocket.util.Util;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -11,9 +11,7 @@ import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
-import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public abstract class AbstractCache<B, M> {
@@ -37,7 +35,7 @@ public abstract class AbstractCache<B, M> {
 
     public class Entry {
         // Read-only fields, these are never changed (although buffer itself can be mutated)
-        private String key;
+        private HashableKey key;
         private B buffer;
 
         // These fields require holding the entry's monitor to access
@@ -46,7 +44,7 @@ public abstract class AbstractCache<B, M> {
         private EntryStatus status;
         private Deque<Transaction> pendingReaders;
 
-        public Entry(String key, B buffer) {
+        public Entry(HashableKey key, B buffer) {
             this.key = key;
             this.buffer = buffer;
             this.refCount = 0;
@@ -56,7 +54,7 @@ public abstract class AbstractCache<B, M> {
             lru.addFirst(key);
         }
 
-        public String getKey() {
+        public HashableKey getKey() {
             return key;
         }
 
@@ -247,13 +245,13 @@ public abstract class AbstractCache<B, M> {
     }
 
     class Transaction {
-        private String[] keys;
+        private HashableKey[] keys;
         private Entry[] entries;
         private Future<Entry[]> future;
         private AtomicInteger pending;
 
         @SuppressWarnings("unchecked")
-        public Transaction(String[] keys) {
+        public Transaction(HashableKey[] keys) {
             this.keys = removeDuplicates(keys);
             this.entries = (Entry[]) Array.newInstance(Entry.class, this.keys.length);
             this.pending = new AtomicInteger(this.keys.length);
@@ -268,8 +266,8 @@ public abstract class AbstractCache<B, M> {
     }
 
     private ArrayDeque<Transaction> pendingTransactions;
-    private HashMap<String, Entry> cache;
-    private LRUQueue<String> lru;
+    private HashMap<HashableKey, Entry> cache;
+    private LRUQueue<HashableKey> lru;
 
     protected AbstractCache() {
         pendingTransactions = new ArrayDeque<>();
@@ -277,10 +275,10 @@ public abstract class AbstractCache<B, M> {
         lru = new LRUQueue<>();
     }
 
-    protected abstract Optional<B> createBuffer(String key);
+    protected abstract Optional<B> createBuffer(HashableKey key);
     protected abstract void destroyBuffer(B buffer);
 
-    synchronized public Optional<Entry> tryAcquireImmediately(String key) {
+    synchronized public Optional<Entry> tryAcquireImmediately(HashableKey key) {
         Entry e = cache.getOrDefault(key, null);
         if (e != null && e.acquireImmediately()) {
             return Optional.of(e);
@@ -289,7 +287,7 @@ public abstract class AbstractCache<B, M> {
         }
     }
 
-    synchronized public Future<Entry[]> acquireAllAsync(String ... keys) {
+    synchronized public Future<Entry[]> acquireAllAsync(HashableKey ... keys) {
         Transaction trans = new Transaction(keys);
         pendingTransactions.addLast(trans);
         makeProgress();
@@ -297,8 +295,8 @@ public abstract class AbstractCache<B, M> {
         return trans.future;
     }
 
-    synchronized public Future<Entry> acquireAsync(String key) {
-        String[] keys = new String[]{key};
+    synchronized public Future<Entry> acquireAsync(HashableKey key) {
+        HashableKey[] keys = new HashableKey[]{key};
         Future<Entry[]> fut = acquireAllAsync(keys);
 
         return fut.thenMap(m -> m[0]);
@@ -312,7 +310,7 @@ public abstract class AbstractCache<B, M> {
             boolean success = true;
 
             for (int i = 0; i < trans.keys.length; i++) {
-                String key = trans.keys[i];
+                HashableKey key = trans.keys[i];
                 Entry e = trans.entries[i];
 
                 if (e != null) {
@@ -350,7 +348,7 @@ public abstract class AbstractCache<B, M> {
 
     synchronized private boolean evictOne() {
         // delete unused cache item and free the buffer so it can be reused
-        Optional<String> oldest = lru.removeFirst();
+        Optional<HashableKey> oldest = lru.removeFirst();
         if (oldest.isEmpty()) {
             return false;
         }
@@ -388,11 +386,11 @@ public abstract class AbstractCache<B, M> {
         }
     }
 
-    protected static String[] removeDuplicates(String[] keys) {
-        String[] output = new String[keys.length];
+    protected static HashableKey[] removeDuplicates(HashableKey[] keys) {
+        HashableKey[] output = new HashableKey[keys.length];
         int n = 0;
 
-        for (String key: keys) {
+        for (HashableKey key: keys) {
             boolean found = false;
 
             for (int i = 0; i < n; i++) {

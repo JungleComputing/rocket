@@ -1,6 +1,7 @@
 package nl.esciencecenter.rocket.profiling;
 
 
+import nl.esciencecenter.rocket.types.LeafTask;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -39,8 +40,8 @@ public class FilterProfiler implements Profiler {
     }
 
     @Override
-    public Record traceCorrelation(String actor, String left, String right) {
-        return enableCorrelations ? parent.traceCorrelation(actor, left, right) : DUMMY_RECORD;
+    public Record traceCorrelation(String actor, LeafTask task) {
+        return enableCorrelations ? parent.traceCorrelation(actor, task) : DUMMY_RECORD;
     }
 
     @Override

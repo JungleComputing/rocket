@@ -2,7 +2,7 @@ package nl.esciencecenter.rocket.util;
 
 import java.util.concurrent.atomic.AtomicLong;
 
-public class PriorityTask implements Runnable, Comparable<PriorityTask> {
+public class PriorityRunnable implements Runnable, Comparable<PriorityRunnable> {
     static final AtomicLong seq = new AtomicLong(0);
 
     static final public long PRIORITY_HIGHEST = 400;
@@ -15,7 +15,7 @@ public class PriorityTask implements Runnable, Comparable<PriorityTask> {
     private long time;
     private long priority;
 
-    public PriorityTask(long priority, Runnable obj) {
+    public PriorityRunnable(long priority, Runnable obj) {
         this.obj = obj;
         this.time = seq.getAndIncrement();
         this.priority = priority;
@@ -27,7 +27,7 @@ public class PriorityTask implements Runnable, Comparable<PriorityTask> {
     }
 
     @Override
-    public int compareTo(PriorityTask that) {
+    public int compareTo(PriorityRunnable that) {
         if (this.priority != that.priority) {
             return -Long.compare(this.priority, that.priority);
         } else {

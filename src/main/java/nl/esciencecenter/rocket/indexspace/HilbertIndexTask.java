@@ -1,10 +1,16 @@
 package nl.esciencecenter.rocket.indexspace;
 
+import nl.esciencecenter.rocket.types.HierarchicalTask;
+import nl.esciencecenter.rocket.types.LeafTask;
+
 import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Stack;
 
 import static nl.esciencecenter.rocket.util.Util.calculateTriangleSize;
 
-public class HilbertCurveIndexSpace<K> implements IndexSpace<K>, Serializable {
+public class HilbertIndexTask<K, R> implements HierarchicalTask<R>, Serializable {
     private static final long serialVersionUID = 2805522066207471234L;
 
     private static int[][][] spaceFillingRules;
@@ -19,6 +25,7 @@ public class HilbertCurveIndexSpace<K> implements IndexSpace<K>, Serializable {
         };
     }
 
+    private final CorrelationSpawner<K, R> spawner;
     private int leftOffset;
     private int leftLength;
     private int rightOffset;
@@ -28,16 +35,19 @@ public class HilbertCurveIndexSpace<K> implements IndexSpace<K>, Serializable {
     private int minSplitSize;
     private boolean includeDiagonal;
 
-    public HilbertCurveIndexSpace(K[] keys, int minSplitSize, boolean includeDiagonal) {
-        this(0, keys.length, 0, keys.length,
+    public HilbertIndexTask(CorrelationSpawner<K, R> spawner, K[] keys, int minSplitSize, boolean includeDiagonal) {
+        this(spawner,
+                0, keys.length, 0, keys.length,
                 keys,
                 minSplitSize, (byte) 0, includeDiagonal);
     }
 
-    public HilbertCurveIndexSpace(int leftOffset, int leftLength,
-                                  int rightOffset, int rightLength,
-                                  K[] keys,
-                                  int minSplitSize, byte rule, boolean includeDiagonal) {
+    public HilbertIndexTask(CorrelationSpawner<K, R> spawner,
+                            int leftOffset, int leftLength,
+                            int rightOffset, int rightLength,
+                            K[] keys,
+                            int minSplitSize, byte rule, boolean includeDiagonal) {
+        this.spawner = spawner;
         this.leftOffset = leftOffset;
         this.leftLength = leftLength;
         this.rightOffset = rightOffset;
@@ -48,7 +58,7 @@ public class HilbertCurveIndexSpace<K> implements IndexSpace<K>, Serializable {
         this.includeDiagonal = includeDiagonal;
     }
 
-    private void launchSplits(IndexSpaceDivision<K> result) {
+    public void calculateSplit(List<HilbertIndexTask<K, R>> result) {
         int leftHalf = leftLength / 2;
         int rightHalf = rightLength / 2;
 
@@ -74,7 +84,8 @@ public class HilbertCurveIndexSpace<K> implements IndexSpace<K>, Serializable {
                 continue;
             }
 
-            HilbertCurveIndexSpace<K> task = new HilbertCurveIndexSpace<K>(
+            HilbertIndexTask<K, R> task = new HilbertIndexTask<>(
+                    spawner,
                     l0,
                     ln,
                     r0,
@@ -89,30 +100,56 @@ public class HilbertCurveIndexSpace<K> implements IndexSpace<K>, Serializable {
                 continue;
             }
 
-            if (ln * rn < minSplitSize) {
-                task.divide(result);
+            result.add(task);
+        }
+    }
+
+    public boolean shouldSplit() {
+        return leftLength * rightLength >= minSplitSize;
+    }
+
+    @Override
+    public List<HierarchicalTask<R>> split() {
+        if (!shouldSplit()) {
+            return List.of();
+        }
+
+        List<HilbertIndexTask<K, R>> result = new ArrayList<>();
+        calculateSplit(result);
+
+        // Dirty!!!
+        return (List<HierarchicalTask<R>>) (List<?>) result;
+    }
+
+    @Override
+    public List<LeafTask<R>> getLeafs() {
+        if (shouldSplit()) {
+            return List.of();
+        }
+
+        List<LeafTask<R>> result = new ArrayList<>();
+        Stack<HilbertIndexTask<K, R>> stack = new Stack<>();
+        stack.add(this);
+
+        while (!stack.isEmpty()) {
+            HilbertIndexTask<K, R> task = stack.pop();
+
+            if (task.leftLength == 0 || task.rightLength == 0) {
+                continue;
+            }
+
+            if (task.leftLength > 1 || task.rightLength > 1) {
+                task.calculateSplit(stack);
             } else {
-                result.addSubspace(task);
+                K left = keys[task.leftOffset];
+                K right = keys[task.rightOffset];
+                result.add(spawner.spawn(left, right));
             }
         }
+
+        return result;
     }
 
-    private void launchEntry(IndexSpaceDivision<K> spawner) {
-        if (leftOffset < rightOffset || (leftOffset == rightOffset && includeDiagonal)) {
-            spawner.addEntry(keys[leftOffset], keys[rightOffset]);
-        }
-    }
-
-    @Override
-    public void divide(IndexSpaceDivision<K> result) {
-        if (leftLength > 1 || rightLength > 1) {
-            launchSplits(result);
-        } else {
-            launchEntry(result);
-        }
-    }
-
-    @Override
     public int size() {
         return calculateTriangleSize(
                 leftOffset, leftLength + leftOffset,

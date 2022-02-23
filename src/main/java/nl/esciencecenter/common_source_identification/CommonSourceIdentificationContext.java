@@ -9,15 +9,20 @@ import nl.esciencecenter.common_source_identification.kernels.filter.PRNUFilter;
 import nl.esciencecenter.common_source_identification.util.Dimension;
 import nl.esciencecenter.rocket.cubaapi.CudaContext;
 import nl.esciencecenter.rocket.cubaapi.CudaMem;
-import nl.esciencecenter.rocket.scheduler.ApplicationContext;
+import nl.esciencecenter.rocket.indexspace.CorrelationSpawner;
+import nl.esciencecenter.rocket.types.ApplicationContext;
+import nl.esciencecenter.rocket.types.InputTask;
+import nl.esciencecenter.rocket.types.LeafTask;
+import nl.esciencecenter.rocket.util.Correlation;
 import nl.esciencecenter.xenon.filesystems.Path;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.List;
 
-public class CommonSourceIdentificationContext implements ApplicationContext<ImageIdentifier, Double> {
+public class CommonSourceIdentificationContext implements ApplicationContext {
     protected static final Logger logger = LogManager.getLogger();
 
     public enum ComparisonStrategy {
@@ -75,53 +80,111 @@ public class CommonSourceIdentificationContext implements ApplicationContext<Ima
         return Sizeof.DOUBLE;
     }
 
-    @Override
-    public Path[] getInputFiles(ImageIdentifier id) {
-        logger.trace("loading {}", id);
 
-        return new Path[]{
-            new Path(id.getPath())
-        };
-    }
-
-    @Override
-    public long parseFiles(ImageIdentifier id, ByteBuffer[] inputBuffers, ByteBuffer outputBuffer) {
-        Dimension imageDim;
-
-        try {
-            imageDim = ReadJPEG.readJPEG(inputBuffers[0], outputBuffer);
-        } catch (Exception e) {
-            throw new RuntimeException("error while reading: " + id.getPath(), e);
-        }
-
-        if (!imageDim.equals(this.imageDim)) {
-            throw new IllegalArgumentException("image has incorrect dimensions: " + id.getPath());
-        }
-
-        return outputBuffer.capacity();
-    }
-
-    @Override
-    public long preprocessInputGPU(ImageIdentifier id, CudaMem input, CudaMem output) {
-        filter.applyGPU(input, output);
-        return filter.getOutputSize();
-    }
-
-    @Override
-    public long correlateGPU(ImageIdentifier left, CudaMem leftMem, ImageIdentifier right, CudaMem rightMem, CudaMem output) {
-        logger.trace("correlation {}x{}", left, right);
-        pce.applyGPU(leftMem, rightMem, output);
-        return  Sizeof.DOUBLE;
-    }
-
-    @Override
-    public Double postprocessOutput(ImageIdentifier left, ImageIdentifier right, ByteBuffer buffer) {
-        return buffer.asDoubleBuffer().get(0);
+    public Input getInput(ImageIdentifier key) {
+        return new Input(key, imageDim);
     }
 
     @Override
     public void destroy() {
         filter.cleanup();
         pce.cleanup();
+    }
+
+    static class Input implements InputTask {
+        private ImageIdentifier id;
+        private Dimension dim;
+
+        Input(ImageIdentifier id, Dimension dim) {
+            this.id = id;
+            this.dim = dim;
+        }
+
+        @Override
+        public Path[] getInputs() {
+            logger.trace("loading {}", id);
+
+            return new Path[]{
+                    new Path(id.getPath())
+            };
+        }
+
+        public ImageIdentifier getKey() {
+            return id;
+        }
+
+        @Override
+        public long preprocess(ByteBuffer[] inputBuffers, ByteBuffer outputBuffer) {
+            Dimension imageDim;
+
+            try {
+                imageDim = ReadJPEG.readJPEG(inputBuffers[0], outputBuffer);
+            } catch (Exception e) {
+                throw new RuntimeException("error while reading: " + id.getPath(), e);
+            }
+
+            if (!imageDim.equals(dim)) {
+                throw new IllegalArgumentException("image has incorrect dimensions: " + id.getPath());
+            }
+
+            return outputBuffer.capacity();
+        }
+
+        @Override
+        public long execute(ApplicationContext context, CudaMem input, CudaMem output) {
+            CommonSourceIdentificationContext c = (CommonSourceIdentificationContext) context;
+            c.filter.applyGPU(input, output);
+            return c.filter.getOutputSize();
+        }
+    }
+
+    static class Task implements LeafTask<Correlation<ImageIdentifier, Double>> {
+        private ImageIdentifier left;
+        private ImageIdentifier right;
+        private Dimension dim;
+
+        Task(ImageIdentifier left, ImageIdentifier right, Dimension dim) {
+            this.left = left;
+            this.right = right;
+            this.dim = dim;
+        }
+
+        @Override
+        public List<InputTask> getInputs() {
+            return List.of(new Input(left, dim), new Input(right, dim));
+        }
+
+
+        @Override
+        public long execute(ApplicationContext context, CudaMem[] inputs, CudaMem output) {
+            logger.trace("correlation {}", this);
+            CommonSourceIdentificationContext c = (CommonSourceIdentificationContext) context;
+            c.pce.applyGPU(inputs[0], inputs[1], output);
+            return  Sizeof.DOUBLE;
+        }
+
+        @Override
+        public Correlation<ImageIdentifier, Double> postprocess(ApplicationContext context, ByteBuffer buffer) {
+            Double corr = (Double) buffer.asDoubleBuffer().get(0);
+            return new Correlation<>(left, right, corr);
+        }
+
+        @Override
+        public String toString() {
+            return left + " x " + right;
+        }
+    }
+
+    static class Spawner implements CorrelationSpawner<ImageIdentifier, Correlation<ImageIdentifier, Double>> {
+        private Dimension dim;
+
+        Spawner(Dimension dim) {
+            this.dim = dim;
+        }
+
+        @Override
+        public LeafTask<Correlation<ImageIdentifier, Double>> spawn(ImageIdentifier left, ImageIdentifier right) {
+            return new Task(left, right, dim);
+        }
     }
 }
